@@ -15,6 +15,9 @@ class Reinforce(object):
 
     def __init__(self, model, lr):
         self.model = model
+        model.compile(loss=keras.losses.mean_squared_error,
+             optimizer=tf.train.AdamOptimizer(learning_rate=lr),
+             metrics=['accuracy'])
 
         # TODO: Define any training operations and optimizers here, initialize
         #       your variables, or alternately compile your model here.
@@ -65,6 +68,21 @@ def parse_arguments():
 
     return parser.parse_args()
 
+def make_model(env):
+    num_states = env.observation_space.shape[0]
+    num_actions = env.action_space.n
+    print("Number of states: ",num_states)
+    print("Number of actions: ",num_actions)
+    model = keras.models.Sequential([
+    keras.layers.Dense(16, input_dim=num_states, activation='relu',bias_initializer='zeros',kernel_initializer=keras.initializers.VarianceScaling(scale=1.0, mode='fan_avg', distribution='uniform', seed=None)),
+    keras.layers.Dense(16, activation='relu',bias_initializer='zeros',kernel_initializer=keras.initializers.VarianceScaling(scale=1.0, mode='fan_avg', distribution='uniform', seed=None)),
+    keras.layers.Dense(16, activation='relu',bias_initializer='zeros',kernel_initializer=keras.initializers.VarianceScaling(scale=1.0, mode='fan_avg', distribution='uniform', seed=None)),
+    keras.layers.Dense(num_actions, activation='softmax',bias_initializer='zeros',kernel_initializer=keras.initializers.VarianceScaling(scale=1.0, mode='fan_avg', distribution='uniform', seed=None))]) 
+    # print(model.summary())
+    # config = model.get_config()
+    # print(config)
+    return model
+
 
 def main(args):
     # Parse command-line arguments.
@@ -77,6 +95,8 @@ def main(args):
     env = gym.make('LunarLander-v2')
 
     # TODO: Create the model.
+    model = make_model(env)
+    agent = Reinforce(model,lr)
 
     # TODO: Train the model using REINFORCE and plot the learning curve.
 
