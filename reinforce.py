@@ -134,7 +134,7 @@ def train_agent(agent,env,gamma,num_episodes,test_frequency = 200, num_test_epsi
             agent.writer.add_scalar('Reward VS Episode', score , e)
             scores.append(score)
             episodes.append(e)
-
+    #PLOT ERROR BAR GRAPH NOW
 
 def main(args):
     # Parse command-line arguments.
