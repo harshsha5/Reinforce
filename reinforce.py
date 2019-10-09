@@ -21,6 +21,9 @@ from torch.distributions import Categorical
 
 from tensorboardX import SummaryWriter
 
+use_cuda = torch.cuda.is_available()
+device = torch.device('cuda:0' if use_cuda else 'cpu')
+
 class Agent(torch.nn.Module):
     def __init__(self, env):
         super(Agent, self).__init__()
@@ -74,7 +77,7 @@ def generate_episode(env, policy, render=False):
         if(len(curr_state.shape) == 1):
             curr_state = np.expand_dims(curr_state,0)
         if(torch.cuda.is_available()):
-            prob = policy(torch.from_numpy(curr_state)).float().cuda()
+            prob = policy(torch.from_numpy(curr_state)).float().to(device)
         else:
             prob = policy(torch.from_numpy(curr_state)).float()
         action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
@@ -96,7 +99,7 @@ def train(env, policy, optimizer, gamma=1.0):
     for i in range(len(rewards)-1):
         Gt = np.vstack((rewards[-2-i] + gamma*Gt[0],Gt))
     if(torch.cuda.is_available()):
-        Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float().cuda() #Dividing by length to perfrom 1/T step in loss calculation
+        Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float().to(device) #Dividing by length to perfrom 1/T step in loss calculation
     else: 
         Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float() #Dividing by length to perfrom 1/T step in loss calculation
     #WRITE POLICY UPDATE STEP
@@ -104,7 +107,7 @@ def train(env, policy, optimizer, gamma=1.0):
     for i in range(Gt.shape[0]):
         policy_loss.append(Gt[i]*-log_probs[i]) # Since log will be in a value between -inf and 0
     if(torch.cuda.is_available()):
-        policy_loss = torch.stack(policy_loss).sum().float().cuda()
+        policy_loss = torch.stack(policy_loss).sum().float().to(device)
     else:
         policy_loss = torch.stack(policy_loss).sum().float()
     optimizer.zero_grad()
@@ -175,8 +178,7 @@ def main(args):
     print("num_test_epsiodes: ", num_test_epsiodes)
 
     policy = Agent(env)
-    if(torch.cuda.is_available()):
-        policy.cuda()
+    policy.to(device)
 
     optimizer = optim.Adam(policy.parameters(), lr=lr)
 
