@@ -50,7 +50,7 @@ def select_action(env, probs, type="prob_sample"):
         action = m.sample()
         return action, m.log_prob(action)
     elif(type=="best"):
-        return np.argmax(probs,axis=1)[0]
+        return torch.argmax(probs,axis=1)
     elif(type=="random"):
         return env.action_space.sample()
 
@@ -102,7 +102,7 @@ def train(env, policy, optimizer, gamma=1.0):
     #WRITE POLICY UPDATE STEP
     policy_loss = []
     for i in range(Gt.shape[0]):
-        policy_loss.append(Gt[i]*log_probs[i])
+        policy_loss.append(Gt[i]*-log_probs[i]) # Since log will be in a value between -inf and 0
     if(torch.cuda.is_available()):
         policy_loss = torch.stack(policy_loss).sum().float().cuda()
     else:
@@ -110,17 +110,17 @@ def train(env, policy, optimizer, gamma=1.0):
     optimizer.zero_grad()
     policy_loss.backward()
     optimizer.step()
-    return policy_loss
+    return policy_loss.item()
 
-def transform_state(state,size):
+def transform_state(state, size):
     return np.reshape(state, [1, size])
 
-def test_agent(env,policy,num_test_epsiodes):
+def test_agent(env,policy, num_test_epsiodes):
     total_reward = 0
     for e in range(num_test_epsiodes):
         _, _, rewards, _ = generate_episode(env, policy)
         total_reward += sum(rewards)
-    print("Reward is: ",int(total_reward/num_test_epsiodes))
+    print("Testing - Average Reward over %d episodes is %f" %(num_test_epsiodes, total_reward/num_test_epsiodes))
     return int(total_reward/num_test_epsiodes)
 
 
@@ -130,6 +130,7 @@ def train_agent(policy, env, gamma, num_episodes, optimizer, writer, test_freque
     for e in range(num_episodes):
         loss = train(env, policy, optimizer, gamma)
         writer.add_scalar("train/Policy Loss", loss, e)
+        print("Completed episode %d, with loss: %f"%(e, loss))
         if(e%test_frequency==0):
             score = test_agent(env, policy, num_test_epsiodes)
             writer.add_scalar('test/Reward', score , e)
