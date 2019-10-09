@@ -25,15 +25,15 @@ use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if use_cuda else 'cpu')
 
 class Agent(torch.nn.Module):
-    def __init__(self, env):
+    def __init__(self, env, hidden_units):
         super(Agent, self).__init__()
 
-        num_states = env.observation_space.shape[0]
-        num_actions = env.action_space.n
-        self.linear1 = nn.Linear(num_states, 16)
-        self.linear2 = nn.Linear(16, 16)
-        self.linear3 = nn.Linear(16, 16)
-        self.linear4 = nn.Linear(16, num_actions)
+        self.num_states = env.observation_space.shape[0]
+        self.num_actions = env.action_space.n
+        self.linear1 = nn.Linear(self.num_states, hidden_units)
+        self.linear2 = nn.Linear(hidden_units, hidden_units)
+        self.linear3 = nn.Linear(hidden_units, hidden_units)
+        self.linear4 = nn.Linear(hidden_units, self.num_actions)
 
     def forward(self, x):
         x = F.relu(self.linear1(x))
@@ -41,6 +41,12 @@ class Agent(torch.nn.Module):
         x = F.relu(self.linear3(x))
         x = F.softmax(self.linear4(x), dim=1)
         return x
+    
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            alpha = np.sqrt(3/((self.num_states+self.num_actions)/2))
+            m.bias.data.fill_(0)
+            m.weight.data.uniform_(-alpha,alpha)
 
 def normalize_returns(Gt):
     Gt -= np.mean(Gt)
@@ -110,27 +116,36 @@ def transform_state(state, size):
     return np.reshape(state, [1, size])
 
 def test_agent(env,policy, num_test_epsiodes):
-    total_reward = 0
+    rewards=[]
     for e in range(num_test_epsiodes):
-        _, _, rewards, _ = generate_episode(env, policy)
-        total_reward += sum(rewards)
-    print("Testing - Average Reward over %d episodes is %f" %(num_test_epsiodes, total_reward/num_test_epsiodes))
-    return int(total_reward/num_test_epsiodes)
+        _, _, episode_rewards, _ = generate_episode(env, policy)
+        rewards.append(sum(episode_rewards))
+    rewards = np.array(rewards)
+    print("Testing - %d episodes mean %f & std deviation %f" %(num_test_epsiodes, rewards.mean(), rewards.std()))
+    return rewards.mean(), rewards.std()
 
 
-def train_agent(policy, env, gamma, num_episodes, optimizer, writer, test_frequency=200, num_test_epsiodes=100, ):
+def train_agent(policy, env, optimizer, writer, args):
     scores = []
     episodes = []
-    for e in range(num_episodes):
-        loss = train(env, policy, optimizer, gamma)
+    stds = []
+    for e in range(args.num_episodes):
+        loss = train(env, policy, optimizer, args.gamma)
         writer.add_scalar("train/Policy Loss", loss, e)
         print("Completed episode %d, with loss: %f"%(e, loss))
-        if(e%test_frequency==0):
-            score = test_agent(env, policy, num_test_epsiodes)
+        if(e % args.test_frequency==0):
+            score, std = test_agent(env, policy, args.num_test_epsiodes)
             writer.add_scalar('test/Reward', score , e)
             scores.append(score)
             episodes.append(e)
+            stds.append(std)
+            np.savez('reward_data.npz', episodes, scores, stds)
     #PLOT ERROR BAR GRAPH NOW
+
+def plot_error_bar(episodes, means, stds):
+    fig = plt.figure()
+    plt.errorbar(episodes, means, stds)
+    plt.savefig("mean_std.png")
 
 def parse_arguments():
     # Command-line flags are defined here.
@@ -140,6 +155,7 @@ def parse_arguments():
     parser.add_argument('--gamma', dest='gamma', type=float, default=1, help="The discount factor")
     parser.add_argument('--test_frequency', dest='test_frequency', type=int, default=200, help="After how many policies do I test the model")
     parser.add_argument('--num_test_epsiodes', dest='num_test_epsiodes', type=int, default=100, help="For how many policies do I test the model")
+    parser.add_argument('--hidden_units', dest='hidden_units', type=int, default=16, help="Number of Hidden units in the linear layer")
     # https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
     parser_group = parser.add_mutually_exclusive_group(required=False)
     parser_group.add_argument('--render', dest='render',action='store_true',help="Whether to render the environment.")
@@ -168,12 +184,13 @@ def main(args):
     print("Test Frequency: ", test_frequency)
     print("num_test_epsiodes: ", num_test_epsiodes)
 
-    policy = Agent(env)
+    policy = Agent(env, args.hidden_units)
+    policy.apply(policy.init_weights)
     policy.to(device)
 
     optimizer = optim.Adam(policy.parameters(), lr=lr)
 
-    train_agent(policy=policy, env=env, gamma=gamma, num_episodes=num_episodes, optimizer=optimizer, writer=writer, test_frequency=test_frequency, num_test_epsiodes=num_test_epsiodes)
+    train_agent(policy=policy, env=env, optimizer=optimizer, writer=writer, args=args)
     # TODO: Train the model using REINFORCE and plot the learning curve.
 
 if __name__ == '__main__':
