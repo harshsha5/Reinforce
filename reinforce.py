@@ -4,7 +4,6 @@ import numpy as np
 # import tensorflow as tf
 # import keras
 import gym
-import pdb
 
 import matplotlib
 matplotlib.use('Agg')
@@ -37,7 +36,7 @@ class Agent(torch.nn.Module):
         x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         x = F.relu(self.linear3(x))
-        x = F.softmax(self.linear4(x))
+        x = F.softmax(self.linear4(x), dim=1)
         return x
 
 def normalize_returns(Gt):
@@ -72,7 +71,12 @@ def generate_episode(env, policy, render=False):
     done = False
     #For our case the len(states) = len(actions)= len(rewards) //VERIFY 
     while(not done):
-        prob = policy(torch.from_numpy(curr_state)).float()
+        if(len(curr_state.shape) == 1):
+            curr_state = np.expand_dims(curr_state,0)
+        if(torch.cuda.is_available()):
+            prob = policy(torch.from_numpy(curr_state)).float().cuda()
+        else:
+            prob = policy(torch.from_numpy(curr_state)).float()
         action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
         new_state, reward, done, info = env.step(action.item())
         states.append(curr_state)
@@ -91,13 +95,18 @@ def train(env, policy, optimizer, gamma=1.0):
     Gt = np.array([rewards[-1]])
     for i in range(len(rewards)-1):
         Gt = np.vstack((rewards[-2-i] + gamma*Gt[0],Gt))
-    Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float() #Dividing by length to perfrom 1/T step in loss calculation
+    if(torch.cuda.is_available()):
+        Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float().cuda() #Dividing by length to perfrom 1/T step in loss calculation
+    else: 
+        Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float() #Dividing by length to perfrom 1/T step in loss calculation
     #WRITE POLICY UPDATE STEP
     policy_loss = []
     for i in range(Gt.shape[0]):
         policy_loss.append(Gt[i]*log_probs[i])
-    policy_loss = torch.stack(policy_loss).sum().float()
-    pdb.set_trace()
+    if(torch.cuda.is_available()):
+        policy_loss = torch.stack(policy_loss).sum().float().cuda()
+    else:
+        policy_loss = torch.stack(policy_loss).sum().float()
     optimizer.zero_grad()
     policy_loss.backward()
     optimizer.step()
@@ -165,6 +174,9 @@ def main(args):
     print("num_test_epsiodes: ", num_test_epsiodes)
 
     policy = Agent(env)
+    if(torch.cuda.is_available()):
+        policy.cuda()
+
     optimizer = optim.Adam(policy.parameters(), lr=lr)
 
     train_agent(policy=policy, env=env, gamma=gamma, num_episodes=num_episodes, optimizer=optimizer, writer=writer, test_frequency=test_frequency, num_test_epsiodes=num_test_epsiodes)
