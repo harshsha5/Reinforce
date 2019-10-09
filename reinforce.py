@@ -76,10 +76,7 @@ def generate_episode(env, policy, render=False):
     while(not done):
         if(len(curr_state.shape) == 1):
             curr_state = np.expand_dims(curr_state,0)
-        if(torch.cuda.is_available()):
-            prob = policy(torch.from_numpy(curr_state)).float().to(device)
-        else:
-            prob = policy(torch.from_numpy(curr_state)).float()
+        prob = policy(torch.from_numpy(curr_state).float().to(device))
         action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
         new_state, reward, done, info = env.step(action.item())
         states.append(curr_state)
@@ -98,18 +95,12 @@ def train(env, policy, optimizer, gamma=1.0):
     Gt = np.array([rewards[-1]])
     for i in range(len(rewards)-1):
         Gt = np.vstack((rewards[-2-i] + gamma*Gt[0],Gt))
-    if(torch.cuda.is_available()):
-        Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float().to(device) #Dividing by length to perfrom 1/T step in loss calculation
-    else: 
-        Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float() #Dividing by length to perfrom 1/T step in loss calculation
+    Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float().to(device) #Dividing by length to perfrom 1/T step in loss calculation
     #WRITE POLICY UPDATE STEP
     policy_loss = []
     for i in range(Gt.shape[0]):
         policy_loss.append(Gt[i]*-log_probs[i]) # Since log will be in a value between -inf and 0
-    if(torch.cuda.is_available()):
-        policy_loss = torch.stack(policy_loss).sum().float().to(device)
-    else:
-        policy_loss = torch.stack(policy_loss).sum().float()
+    policy_loss = torch.stack(policy_loss).sum().float().to(device)
     optimizer.zero_grad()
     policy_loss.backward()
     optimizer.step()
