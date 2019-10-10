@@ -3,3 +3,7 @@ env/*
 
 *.swp
 __pycache__/*
+
+.DS_Store
+hw/*
+*.mp4
