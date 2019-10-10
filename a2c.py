@@ -126,7 +126,7 @@ def main(args):
     value_policy_optimizer = optim.Adam(value_policy.parameters(), lr=critic_lr)
 
     episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args)
-    np.savez(str(args.n)+'_a2c_reward_data.npz', episodes, scores, stds)
+    np.savez('runs/'+str(args.n)+'_a2c_reward_data_'+timestr, episodes, scores, stds)
     # TODO: Train the model using A2C and plot the learning curves.
 
 

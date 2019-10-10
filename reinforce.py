@@ -28,7 +28,6 @@ device = torch.device('cuda:0' if use_cuda else 'cpu')
 class Agent(torch.nn.Module):
     def __init__(self, env, hidden_units, output=None):
         super(Agent, self).__init__()
-
         self.num_states = env.observation_space.shape[0]
         self.num_actions = env.action_space.n if output==None else output
         self.linear1 = nn.Linear(self.num_states, hidden_units)
@@ -48,11 +47,6 @@ class Agent(torch.nn.Module):
             alpha = np.sqrt(3/((self.num_states+self.num_actions)/2))
             m.bias.data.fill_(0)
             m.weight.data.uniform_(-alpha,alpha)
-
-def normalize_returns(Gt):
-    Gt -= np.mean(Gt)
-    Gt /= np.std(Gt)
-    return Gt
 
 def select_action(env, probs, type="prob_sample"):
     if(type=="prob_sample"):
@@ -98,19 +92,27 @@ def train(env, policy, optimizer, gamma=1.0):
     # Trains the model on a single episode using REINFORCE.
     # TODO: Implement this method. It may be helpful to call the class
     #       method generate_episode() to generate training data.
+
+    # Generate an entire episode
     states, actions, rewards, log_probs = generate_episode(env, policy)
+
+    # Find the advantage of each state and normalize it
     Gt = np.array([rewards[-1]])
     for i in range(len(rewards)-1):
         Gt = np.vstack((rewards[-2-i] + gamma*Gt[0],Gt))
-    Gt = torch.tensor(normalize_returns(Gt)/Gt.shape[0]).squeeze().float().to(device) #Dividing by length to perfrom 1/T step in loss calculation
-    #WRITE POLICY UPDATE STEP
-    policy_loss = []
-    for i in range(Gt.shape[0]):
-        policy_loss.append(Gt[i]*-log_probs[i]) # Since log will be in a value between -inf and 0
-    policy_loss = torch.stack(policy_loss).sum().float().to(device)
+    Gt = torch.tensor(Gt).squeeze().float().to(device)
+    Gt = (Gt - Gt.mean())/Gt.std()
+    
+    # Calculate the Utility (L(theta)) for the episode
+    log_probs = torch.cat(log_probs).float().to(device)
+    policy_loss = (Gt*-log_probs).mean()
+
+    # Update the policy
     optimizer.zero_grad()
     policy_loss.backward()
     optimizer.step()
+
+    # Return the loss for the episode
     return policy_loss.item()
 
 def transform_state(state, size):
@@ -176,7 +178,7 @@ def main(args):
     num_test_epsiodes = args.num_test_epsiodes
 
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    writer = SummaryWriter("reinforce_"+timestr)
+    writer = SummaryWriter("runs/reinforce_"+timestr)
 
     # Create the environment.
     env = gym.make('LunarLander-v2')
@@ -193,7 +195,7 @@ def main(args):
     optimizer = optim.Adam(policy.parameters(), lr=lr)
 
     episodes, scores, stds = train_agent(policy=policy, env=env, optimizer=optimizer, writer=writer, args=args)
-    np.savez('runs/'+'reinforce_reward_data_'+timestr, episodes, scores, stds) 
+    np.savez('runs/reinforce_'+timestr+'/reward_data', episodes, scores, stds) 
     # TODO: Train the model using REINFORCE and plot the learning curve.
 
 if __name__ == '__main__':
