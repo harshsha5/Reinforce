@@ -1,43 +1,69 @@
 import sys
 import argparse
 import numpy as np
-import tensorflow as tf
-import keras
 import gym
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from reinforce import Reinforce
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.distributions import Categorical
+
+from tensorboardX import SummaryWriter
+
+from reinforce import Agent, generate_episode, test_agent
+
+use_cuda = torch.cuda.is_available()
+device = torch.device('cuda:0' if use_cuda else 'cpu')
+
+def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N, gamma):
+    states, actions, rewards, log_probs = generate_episode(env, policy)
+
+    V_all = value_policy(torch.from_numpy(np.array(states)).float().to(device)).squeeze()
+    V_end = V_all[N:]
+    V_end = torch.cat((V_end, torch.zeros(N))) * torch.tensor(pow(gamma, N))
+    rewards_tensor = torch.cat((torch.from_numpy(np.array(rewards)).float().to(device), torch.zeros(N-1).float().to(device)))
+    gamma_multiplier = torch.tensor(np.geomspace(1, pow(gamma, N-1), num=N)).float().to(device)
+    R_t = []
+    for i in range(len(states)):
+        R_t.append(V_end[i] + (gamma_multiplier * rewards_tensor[i:i+N]).sum())
+    R_t = torch.stack(R_t).float().to(device)
+
+    difference = R_t - V_all
+    L_policy = (difference * torch.stack(log_probs).squeeze()).mean()
+    L_value_policy = torch.pow(difference, 2).mean()
+
+    value_policy_optimizer.zero_grad()
+    policy_optimizer.zero_grad()
+    L_policy.backward(retain_graph=True)
+    L_value_policy.backward()
+    policy_optimizer.step()
+    value_policy_optimizer.step()
+
+    return L_policy.item(), L_value_policy.item()
+    # for i in range(len(rewards)-1):
 
 
-class A2C(Reinforce):
-    # Implementation of N-step Advantage Actor Critic.
-    # This class inherits the Reinforce class, so for example, you can reuse
-    # generate_episode() here.
-
-    def __init__(self, model, lr, critic_model, critic_lr, n=20):
-        # Initializes A2C.
-        # Args:
-        # - model: The actor model.
-        # - lr: Learning rate for the actor model.
-        # - critic_model: The critic model.
-        # - critic_lr: Learning rate for the critic model.
-        # - n: The value of N in N-step A2C.
-        self.model = model
-        self.critic_model = critic_model
-        self.n = n
-
-        # TODO: Define any training operations and optimizers here, initialize
-        #       your variables, or alternately compile your model here.
-
-    def train(self, env, gamma=1.0):
-        # Trains the model on a single episode using A2C.
-        # TODO: Implement this method. It may be helpful to call the class
-        #       method generate_episode() to generate training data.
-        return
-
+def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimizer, writer, args):
+    scores = []
+    episodes = []
+    stds = []
+    for e in range(args.num_episodes):
+        loss_policy, loss_value = train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, args.n, args.gamma)
+        writer.add_scalar("train/Policy Loss", loss_policy, e)
+        writer.add_scalar("train/Value Policy Loss", loss_value, e)
+        print("Completed episode %d, with Policy loss: %f and Value Policy Loss: %f"%(e, loss_policy, loss_value))
+        if(e % args.test_frequency==0):
+            score, std = test_agent(env, policy, args.num_test_epsiodes)
+            writer.add_scalar('test/Reward', score , e)
+            scores.append(score)
+            episodes.append(e)
+            stds.append(std)
+            np.savez(str(args.n)+'_a2c_reward_data.npz', episodes, scores, stds)
 
 def parse_arguments():
     # Command-line flags are defined here.
@@ -48,8 +74,14 @@ def parse_arguments():
                         default=5e-4, help="The actor's learning rate.")
     parser.add_argument('--critic-lr', dest='critic_lr', type=float,
                         default=1e-4, help="The critic's learning rate.")
+    parser.add_argument('--gamma', dest='gamma', type=float,
+                        default=0.99, help="Gamma value.")
     parser.add_argument('--n', dest='n', type=int,
                         default=20, help="The value of N in N-step A2C.")
+    parser.add_argument('--test_frequency', dest='test_frequency', type=int, default=200, help="After how many policies do I test the model")
+    parser.add_argument('--num_test_epsiodes', dest='num_test_epsiodes', type=int, default=100, help="For how many policies do I test the model")
+    parser.add_argument('--hidden_units', dest='hidden_units', type=int, default=16, help="Number of Hidden units in the linear layer")
+    
 
     # https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
     parser_group = parser.add_mutually_exclusive_group(required=False)
@@ -72,12 +104,26 @@ def main(args):
     critic_lr = args.critic_lr
     n = args.n
     render = args.render
+    test_frequency = args.test_frequency
+    num_test_epsiodes = args.num_test_epsiodes
+
+    writer = SummaryWriter()
 
     # Create the environment.
     env = gym.make('LunarLander-v2')
 
     # TODO: Create the model.
+    policy = Agent(env, args.hidden_units)
+    policy.apply(policy.init_weights)
+    policy.to(device)
+    policy_optimizer = optim.Adam(policy.parameters(), lr=lr)
 
+    value_policy = Agent(env, args.hidden_units, 1)
+    value_policy.apply(value_policy.init_weights)
+    value_policy.to(device)
+    value_policy_optimizer = optim.Adam(value_policy.parameters(), lr=critic_lr)
+
+    train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args)
     # TODO: Train the model using A2C and plot the learning curves.
 
 

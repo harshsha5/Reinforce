@@ -25,11 +25,11 @@ use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if use_cuda else 'cpu')
 
 class Agent(torch.nn.Module):
-    def __init__(self, env, hidden_units):
+    def __init__(self, env, hidden_units, output=None):
         super(Agent, self).__init__()
 
         self.num_states = env.observation_space.shape[0]
-        self.num_actions = env.action_space.n
+        self.num_actions = env.action_space.n if output==None else output
         self.linear1 = nn.Linear(self.num_states, hidden_units)
         self.linear2 = nn.Linear(hidden_units, hidden_units)
         self.linear3 = nn.Linear(hidden_units, hidden_units)
@@ -115,7 +115,7 @@ def train(env, policy, optimizer, gamma=1.0):
 def transform_state(state, size):
     return np.reshape(state, [1, size])
 
-def test_agent(env,policy, num_test_epsiodes):
+def test_agent(env, policy, num_test_epsiodes):
     rewards=[]
     for e in range(num_test_epsiodes):
         _, _, episode_rewards, _ = generate_episode(env, policy)
