@@ -14,6 +14,7 @@ import torch.optim as optim
 from torch.distributions import Categorical
 
 from tensorboardX import SummaryWriter
+import time
 
 from reinforce import Agent, generate_episode, test_agent
 
@@ -63,7 +64,7 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
             scores.append(score)
             episodes.append(e)
             stds.append(std)
-            np.savez(str(args.n)+'_a2c_reward_data.npz', episodes, scores, stds)
+    return episodes, scores, stds
 
 def parse_arguments():
     # Command-line flags are defined here.
@@ -107,7 +108,8 @@ def main(args):
     test_frequency = args.test_frequency
     num_test_epsiodes = args.num_test_epsiodes
 
-    writer = SummaryWriter()
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    writer = SummaryWriter("ac2_"+timestr)
 
     # Create the environment.
     env = gym.make('LunarLander-v2')
@@ -123,7 +125,8 @@ def main(args):
     value_policy.to(device)
     value_policy_optimizer = optim.Adam(value_policy.parameters(), lr=critic_lr)
 
-    train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args)
+    episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args)
+    np.savez(str(args.n)+'_a2c_reward_data.npz', episodes, scores, stds)
     # TODO: Train the model using A2C and plot the learning curves.
 
 

@@ -20,6 +20,7 @@ import torch.optim as optim
 from torch.distributions import Categorical
 
 from tensorboardX import SummaryWriter
+import time
 
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if use_cuda else 'cpu')
@@ -139,7 +140,7 @@ def train_agent(policy, env, optimizer, writer, args):
             scores.append(score)
             episodes.append(e)
             stds.append(std)
-            np.savez('reward_data.npz', episodes, scores, stds)
+    return episodes, scores, stds
     #PLOT ERROR BAR GRAPH NOW
 
 def plot_error_bar(episodes, means, stds):
@@ -174,7 +175,8 @@ def main(args):
     test_frequency = args.test_frequency
     num_test_epsiodes = args.num_test_epsiodes
 
-    writer = SummaryWriter()
+    timestr = time.strftime("%Y%m%d-%H%M%S")
+    writer = SummaryWriter("reinforce_"+timestr)
 
     # Create the environment.
     env = gym.make('LunarLander-v2')
@@ -190,7 +192,8 @@ def main(args):
 
     optimizer = optim.Adam(policy.parameters(), lr=lr)
 
-    train_agent(policy=policy, env=env, optimizer=optimizer, writer=writer, args=args)
+    episodes, scores, stds = train_agent(policy=policy, env=env, optimizer=optimizer, writer=writer, args=args)
+    np.savez('runs/'+'reinforce_reward_data_'+timestr, episodes, scores, stds) 
     # TODO: Train the model using REINFORCE and plot the learning curve.
 
 if __name__ == '__main__':
