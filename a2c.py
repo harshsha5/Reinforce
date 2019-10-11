@@ -26,7 +26,7 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
 
     V_all = value_policy(torch.from_numpy(np.array(states)).float().to(device)).squeeze()
     V_end = V_all[N:]
-    V_end = torch.cat((V_end, torch.zeros(N))) * torch.tensor(pow(gamma, N))
+    V_end = torch.cat((V_end, torch.zeros(N).float().to(device))) * torch.tensor(pow(gamma, N)).float().to(device)
     rewards_tensor = torch.cat((torch.from_numpy(np.array(rewards)).float().to(device), torch.zeros(N-1).float().to(device)))
     gamma_multiplier = torch.tensor(np.geomspace(1, pow(gamma, N-1), num=N)).float().to(device)
     R_t = []
