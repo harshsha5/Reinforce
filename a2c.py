@@ -35,7 +35,7 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
     R_t = torch.stack(R_t).float().to(device)
 
     difference = R_t - V_all
-    L_policy = (difference * torch.stack(log_probs).squeeze()).mean()
+    L_policy = (difference * -torch.stack(log_probs).squeeze()).mean()
     L_value_policy = torch.pow(difference, 2).mean()
 
     value_policy_optimizer.zero_grad()
@@ -49,7 +49,7 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
     # for i in range(len(rewards)-1):
 
 
-def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimizer, writer, args):
+def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimizer, writer, args, save_path):
     scores = []
     episodes = []
     stds = []
@@ -64,6 +64,16 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
             scores.append(score)
             episodes.append(e)
             stds.append(std)
+        if(e % args.save_model_frequency == 0):
+            torch.save({
+                'epoch': e,
+                'policy_state_dict': policy.state_dict(),
+                'value_policy_state_dict': value_policy.state_dict(),
+                'policy_optimizer_state_dict': policy_optimizer.state_dict(),
+                'value_policy_optimizer_state_dict': value_policy_optimizer.state_dict(),
+                'loss_policy': loss_policy,
+                'loss_value': loss_value
+                }, save_path+'checkpoint'+str(e)+'.pth')
     return episodes, scores, stds
 
 def parse_arguments():
@@ -82,7 +92,8 @@ def parse_arguments():
     parser.add_argument('--test_frequency', dest='test_frequency', type=int, default=200, help="After how many policies do I test the model")
     parser.add_argument('--num_test_epsiodes', dest='num_test_epsiodes', type=int, default=100, help="For how many policies do I test the model")
     parser.add_argument('--hidden_units', dest='hidden_units', type=int, default=16, help="Number of Hidden units in the linear layer")
-    
+    parser.add_argument('--save_model_frequency', dest='save_model_frequency', type=int, default=1000, help="Frequency of saving the model")
+    parser.add_argument('--load_model', dest='load_model', type=str, default="", help="load path of the model")
 
     # https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
     parser_group = parser.add_mutually_exclusive_group(required=False)
@@ -109,24 +120,36 @@ def main(args):
     num_test_epsiodes = args.num_test_epsiodes
 
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    writer = SummaryWriter("ac2_"+timestr)
+    save_path = "runs/a2c_"+timestr+'/'
 
     # Create the environment.
     env = gym.make('LunarLander-v2')
 
     # TODO: Create the model.
     policy = Agent(env, args.hidden_units)
-    policy.apply(policy.init_weights)
     policy.to(device)
     policy_optimizer = optim.Adam(policy.parameters(), lr=lr)
 
     value_policy = Agent(env, args.hidden_units, 1)
-    value_policy.apply(value_policy.init_weights)
     value_policy.to(device)
     value_policy_optimizer = optim.Adam(value_policy.parameters(), lr=critic_lr)
 
-    episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args)
-    np.savez('runs/'+str(args.n)+'_a2c_reward_data_'+timestr, episodes, scores, stds)
+    if(args.load_model == ""):
+        writer = SummaryWriter(save_path)
+        policy.apply(policy.init_weights)
+        value_policy.apply(value_policy.init_weights)
+        episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args, save_path=save_path)
+        np.savez('runs/'+str(args.n)+'_a2c_reward_data_'+timestr, episodes, scores, stds)
+    else:
+        checkpoint = torch.load(args.load_model+'.pth')
+        policy.load_state_dict(checkpoint['model_state_dict'])
+        value_policy.load_state_dict(checkpoint['model_state_dict'])
+        policy_optimizer.load_state_dict(checkpoint['policy_optimizer_state_dict'])
+        value_policy_optimizer.load_state_dict(checkpoint['value_policy_optimizer_state_dict'])
+        epoch = checkpoint['epoch']
+        loss = checkpoint['loss']
+        env = gym.wrappers.Monitor(env, "video.mp4", force=True)
+        generate_episode(env, policy, True)
     # TODO: Train the model using A2C and plot the learning curves.
 
 
