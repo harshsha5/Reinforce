@@ -18,6 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.distributions import Categorical
+from torch.utils import data
 
 from tensorboardX import SummaryWriter
 import time
@@ -58,7 +59,7 @@ def select_action(env, probs, type="prob_sample"):
     elif(type=="random"):
         return env.action_space.sample()
 
-def generate_episode(env, policy, render=False):
+def generate_episode(env, policy, render=False, num_ep=1):
     # Generates an episode by executing the current policy in the given env.
     # Returns:
     # - a list of states, indexed by time step
@@ -70,24 +71,25 @@ def generate_episode(env, policy, render=False):
     rewards = []
     log_probs = []
 
-    curr_state = env.reset()
-    # curr_state = transform_state(curr_state, env.observation_space.shape[0])
-    done = False
-    #For our case the len(states) = len(actions)= len(rewards) //VERIFY 
-    while(not done):
-        if(render):
-            env.render()
-        if(len(curr_state.shape) == 1):
-            curr_state = np.expand_dims(curr_state,0)
-        prob = policy(torch.from_numpy(curr_state).float().to(device))
-        action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
-        new_state, reward, done, info = env.step(action.item())
-        states.append(curr_state)
-        actions.append(action)
-        rewards.append(reward)
-        log_probs.append(log_prob)
-        curr_state = new_state
-        # curr_state = transform_state(new_state, env.observation_space.shape[0])
+    for _ in range(num_ep):
+        curr_state = env.reset()
+        # curr_state = transform_state(curr_state, env.observation_space.shape[0])
+        done = False
+        #For our case the len(states) = len(actions)= len(rewards) //VERIFY
+        while(not done):
+            if(render):
+                env.render()
+            if(len(curr_state.shape) == 1):
+                curr_state = np.expand_dims(curr_state,0)
+            prob = policy(torch.from_numpy(curr_state).float().to(device))
+            action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
+            new_state, reward, done, info = env.step(action.item())
+            states.append(curr_state)
+            actions.append(action)
+            rewards.append(reward)
+            log_probs.append(log_prob)
+            curr_state = new_state
+    states = torch.from_numpy(np.array(states))
     return states, actions, rewards, log_probs
 
 def train(env, policy, optimizer, gamma=1.0):
@@ -107,15 +109,16 @@ def train(env, policy, optimizer, gamma=1.0):
     
     # Calculate the Utility (L(theta)) for the episode
     log_probs = torch.cat(log_probs).float().to(device)
-    policy_loss = (Gt*-log_probs).mean()
+    policy_losses = (Gt*-log_probs)
+    mean_policy_loss = policy_losses.mean()
 
     # Update the policy
     optimizer.zero_grad()
-    policy_loss.backward()
+    mean_policy_loss.backward()
     optimizer.step()
 
     # Return the loss for the episode
-    return policy_loss
+    return mean_policy_loss
 
 def transform_state(state, size):
     return np.reshape(state, [1, size])

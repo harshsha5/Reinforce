@@ -22,28 +22,31 @@ use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if use_cuda else 'cpu')
 
 def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N, gamma):
-    states, actions, rewards, log_probs = generate_episode(env, policy)
+    states, actions, rewards, log_probs = generate_episode(env, policy, num_ep=1)
 
     V_all = value_policy(torch.from_numpy(np.array(states)).float().to(device)).squeeze()
     V_end = V_all[N:]
     V_end = torch.cat((V_end, torch.zeros(N).float().to(device))) * torch.tensor(pow(gamma, N)).float().to(device)
+
     rewards_tensor = torch.cat((torch.from_numpy(np.array(rewards)).float().to(device), torch.zeros(N-1).float().to(device)))
     gamma_multiplier = torch.tensor(np.geomspace(1, pow(gamma, N-1), num=N)).float().to(device)
+    import pdb; pdb.set_trace()
     R_t = []
     for i in range(len(states)):
-        R_t.append(V_end[i] + (gamma_multiplier * rewards_tensor[i:i+N]).sum())
-    R_t = torch.stack(R_t).float().to(device)
+        R_t.append(V_end[i].detach() + (gamma_multiplier * rewards_tensor[i:i+N]).sum())
+    R_t = torch.stack(R_t).float().to(device)/torch.tensor(100).float().to(device)
 
     difference = R_t - V_all
-    L_policy = (difference * -torch.stack(log_probs).squeeze()).mean()
+    L_policy = (difference.detach() * -torch.stack(log_probs).squeeze()).mean()
     L_value_policy = torch.pow(difference, 2).mean()
 
     value_policy_optimizer.zero_grad()
-    policy_optimizer.zero_grad()
-    L_policy.backward(retain_graph=True)
     L_value_policy.backward()
-    policy_optimizer.step()
     value_policy_optimizer.step()
+
+    policy_optimizer.zero_grad()
+    L_policy.backward()
+    policy_optimizer.step()
 
     return L_policy.item(), L_value_policy.item()
     # for i in range(len(rewards)-1):
