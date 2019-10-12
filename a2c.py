@@ -30,7 +30,7 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
 
     rewards_tensor = torch.cat((torch.from_numpy(np.array(rewards)).float().to(device), torch.zeros(N-1).float().to(device)))
     gamma_multiplier = torch.tensor(np.geomspace(1, pow(gamma, N-1), num=N)).float().to(device)
-    import pdb; pdb.set_trace()
+    
     R_t = []
     for i in range(len(states)):
         R_t.append(V_end[i].detach() + (gamma_multiplier * rewards_tensor[i:i+N]).sum())
