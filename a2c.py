@@ -67,6 +67,7 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
             scores.append(score)
             episodes.append(e)
             stds.append(std)
+            np.savez(save_path+'reward_data', episodes, scores, stds) 
         if(e % args.save_model_frequency == 0):
             torch.save({
                 'epoch': e,
@@ -123,7 +124,7 @@ def main(args):
     num_test_epsiodes = args.num_test_epsiodes
 
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    save_path = "runs/a2c_"+timestr+'/'
+    save_path = "runs/"+str(args.n)+"a2c_"+timestr+'/'
 
     # Create the environment.
     env = gym.make('LunarLander-v2')
@@ -142,7 +143,6 @@ def main(args):
         policy.apply(policy.init_weights)
         value_policy.apply(value_policy.init_weights)
         episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args, save_path=save_path)
-        np.savez('runs/'+str(args.n)+'_a2c_reward_data_'+timestr, episodes, scores, stds)
     else:
         checkpoint = torch.load(args.load_model+'.pth')
         policy.load_state_dict(checkpoint['model_state_dict'])

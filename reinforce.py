@@ -149,6 +149,7 @@ def train_agent(policy, env, optimizer, writer, args, save_path):
             scores.append(score)
             episodes.append(e)
             stds.append(std)
+            np.savez(save_path+'reward_data', episodes, scores, stds) 
         if(e % args.save_model_frequency == 0):
             torch.save({
                 'epoch': e,
@@ -212,7 +213,7 @@ def main(args):
         writer = SummaryWriter(save_path)
         policy.apply(policy.init_weights)
         episodes, scores, stds = train_agent(policy=policy, env=env, optimizer=optimizer, writer=writer, args=args, save_path=save_path)
-        np.savez(save_path+'reward_data', episodes, scores, stds) 
+        
     else:
         checkpoint = torch.load(args.load_model+'.pth')
         policy.load_state_dict(checkpoint['model_state_dict'])
