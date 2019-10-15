@@ -27,10 +27,10 @@ use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if use_cuda else 'cpu')
 
 class Agent(torch.nn.Module):
-    def __init__(self, env, hidden_units, output=None):
+    def __init__(self, env, hidden_units):
         super(Agent, self).__init__()
         self.num_states = env.observation_space.shape[0]
-        self.num_actions = env.action_space.n if output==None else output
+        self.num_actions = env.action_space.n
         self.linear1 = nn.Linear(self.num_states, hidden_units)
         self.linear2 = nn.Linear(hidden_units, hidden_units)
         self.linear3 = nn.Linear(hidden_units, hidden_units)
@@ -59,7 +59,7 @@ def select_action(env, probs, type="prob_sample"):
     elif(type=="random"):
         return env.action_space.sample()
 
-def generate_episode(env, policy, render=False, num_ep=1):
+def generate_episode(env, policy, render=False):
     # Generates an episode by executing the current policy in the given env.
     # Returns:
     # - a list of states, indexed by time step
@@ -71,24 +71,24 @@ def generate_episode(env, policy, render=False, num_ep=1):
     rewards = []
     log_probs = []
 
-    for _ in range(num_ep):
-        curr_state = env.reset()
-        # curr_state = transform_state(curr_state, env.observation_space.shape[0])
-        done = False
-        #For our case the len(states) = len(actions)= len(rewards) //VERIFY
-        while(not done):
-            if(render):
-                env.render()
-            if(len(curr_state.shape) == 1):
-                curr_state = np.expand_dims(curr_state,0)
-            prob = policy(torch.from_numpy(curr_state).float().to(device))
-            action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
-            new_state, reward, done, info = env.step(action.item())
-            states.append(curr_state)
-            actions.append(action)
-            rewards.append(reward)
-            log_probs.append(log_prob)
-            curr_state = new_state
+    curr_state = env.reset()
+    # curr_state = transform_state(curr_state, env.observation_space.shape[0])
+    done = False
+    #For our case the len(states) = len(actions)= len(rewards) //VERIFY 
+    while(not done):
+        if(render):
+            env.render()
+        if(len(curr_state.shape) == 1):
+            curr_state = np.expand_dims(curr_state,0)
+        prob = policy(torch.from_numpy(curr_state).float().to(device))
+        action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
+        new_state, reward, done, info = env.step(action.item())
+        states.append(curr_state)
+        actions.append(action)
+        rewards.append(reward)
+        log_probs.append(log_prob)
+        curr_state = new_state
+        # curr_state = transform_state(new_state, env.observation_space.shape[0])
     states = torch.from_numpy(np.array(states))
     return states, actions, rewards, log_probs
 
@@ -109,16 +109,15 @@ def train(env, policy, optimizer, gamma=1.0):
     
     # Calculate the Utility (L(theta)) for the episode
     log_probs = torch.cat(log_probs).float().to(device)
-    policy_losses = (Gt*-log_probs)
-    mean_policy_loss = policy_losses.mean()
+    policy_loss = (Gt*-log_probs).mean()
 
     # Update the policy
     optimizer.zero_grad()
-    mean_policy_loss.backward()
+    policy_loss.backward()
     optimizer.step()
 
     # Return the loss for the episode
-    return mean_policy_loss
+    return policy_loss
 
 def transform_state(state, size):
     return np.reshape(state, [1, size])

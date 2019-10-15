@@ -22,10 +22,10 @@ use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if use_cuda else 'cpu')
 
 class CriticAgent(torch.nn.Module):
-    def __init__(self, env, hidden_units, output=None):
+    def __init__(self, env, hidden_units, output=0):
         super(CriticAgent, self).__init__()
         self.num_states = env.observation_space.shape[0]
-        self.num_actions = env.action_space.n if output==None else output
+        self.num_actions = env.action_space.n if output==0 else output
         self.linear1 = nn.Linear(self.num_states, hidden_units)
         self.linear2 = nn.Linear(hidden_units, hidden_units)
         self.linear3 = nn.Linear(hidden_units, hidden_units)
@@ -45,8 +45,8 @@ class CriticAgent(torch.nn.Module):
             m.weight.data.uniform_(-alpha,alpha)
 
 def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N, gamma):
-    states, actions, rewards, log_probs = generate_episode(env, policy, num_ep=1)
-    import pdb; pdb.set_trace()
+    states, actions, rewards, log_probs = generate_episode(env, policy)
+    # import pdb; pdb.set_trace()
     V_all = value_policy(torch.from_numpy(np.array(states.squeeze())).float().to(device)).squeeze()
     V_end = V_all[N:]
     V_end = torch.cat((V_end, torch.zeros(N).float().to(device))) * torch.tensor(pow(gamma, N)).float().to(device)
