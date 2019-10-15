@@ -39,7 +39,7 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
     difference = R_t - V_all
     detached_difference = difference.detach()
     
-    L_policy = (detached_difference * torch.stack(log_probs).squeeze()).sum()
+    L_policy = (detached_difference * -torch.stack(log_probs).squeeze()).sum()
     L_value_policy = torch.pow(difference, 2).mean()
     
     policy_optimizer.zero_grad()
