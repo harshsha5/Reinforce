@@ -37,7 +37,7 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
     R_t = torch.stack(R_t).float().to(device)/torch.tensor(100).float().to(device)
 
     difference = R_t - V_all
-    L_policy = (difference.detach() * -torch.stack(log_probs).squeeze()).sum()
+    L_policy = (difference.detach() * torch.stack(log_probs).squeeze()).sum()
     L_value_policy = torch.pow(difference, 2).mean()
 
     value_policy_optimizer.zero_grad()
