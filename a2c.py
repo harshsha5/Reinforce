@@ -28,7 +28,7 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
     V_end = V_all[N:]
     V_end = torch.cat((V_end, torch.zeros(N).float().to(device))) * torch.tensor(pow(gamma, N)).float().to(device)
 
-    rewards_tensor = torch.cat((torch.from_numpy(np.array(rewards)/100).float().to(device), torch.zeros(N-1).float().to(device)))
+    rewards_tensor = torch.cat((torch.from_numpy(np.array(rewards)/10).float().to(device), torch.zeros(N-1).float().to(device)))
     gamma_multiplier = torch.tensor(np.geomspace(1, pow(gamma, N-1), num=N)).float().to(device)
     
     R_t = []
@@ -37,15 +37,18 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
     R_t = torch.stack(R_t).float().to(device)
 
     difference = R_t - V_all
-    L_policy = (difference.clone().detach() * torch.stack(log_probs).squeeze()).sum()
+    detached_difference = difference.detach()
+    
+    L_policy = (detached_difference * torch.stack(log_probs).squeeze()).sum()
     L_value_policy = torch.pow(difference, 2).mean()
     
     policy_optimizer.zero_grad()
-    L_policy.backward()
-    policy_optimizer.step()
-
     value_policy_optimizer.zero_grad()
+    
+    L_policy.backward()
     L_value_policy.backward()
+
+    policy_optimizer.step()
     value_policy_optimizer.step()
 
     return L_policy.item(), L_value_policy.item()
