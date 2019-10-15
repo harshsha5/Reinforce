@@ -25,10 +25,10 @@ device = torch.device('cuda:0' if use_cuda else 'cpu')
 
 
 class Agent_A3C(torch.nn.Module):
-    def __init__(self, env, hidden_units, output=None):
+    def __init__(self, env):
         super(Agent_A3C, self).__init__()
         self.num_states = env.observation_space.shape[0]
-        self.num_actions = env.action_space.n if output==None else output
+        self.num_actions = env.action_space.n
 
         self.conv1 = torch.nn.Conv2d(4, 32, kernel_size=8, stride=4, padding=0)
         self.conv2 = torch.nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0)
@@ -52,11 +52,11 @@ class Agent_A3C(torch.nn.Module):
 
 
 class CriticAgent_A3C(torch.nn.Module):
-    def __init__(self, env, hidden_units, output=None):
+    def __init__(self, env, hidden_units, output=0):
         super(CriticAgent_A3C, self).__init__()
 
         self.num_states = env.observation_space.shape[0]
-        self.num_actions = env.action_space.n if output==None else output
+        self.num_actions = env.action_space.n if output==0 else output
 
         self.conv1 = torch.nn.Conv2d(4, 32, kernel_size=8, stride=4, padding=0)
         self.conv2 = torch.nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0)
@@ -101,7 +101,7 @@ def select_action(env, probs, type="prob_sample"):
     elif(type=="random"):
         return env.action_space.sample()
 
-def generate_episode(env, policy, render=False, num_ep=1):
+def generate_episode(env, policy, render=False):
     # Generates an episode by executing the current policy in the given env.
     # Returns:
     # - a list of states, indexed by time step
@@ -113,32 +113,29 @@ def generate_episode(env, policy, render=False, num_ep=1):
     rewards = []
     log_probs = []
 
-    for _ in range(num_ep):
-        curr_state = env.reset()
-        # curr_state = transform_state(curr_state, env.observation_space.shape[0])
-        done = False
-        #For our case the len(states) = len(actions)= len(rewards) //VERIFY
-        count = 0
-        frames_4 = collections.deque([np.zeros(shape=(80, 80))]*3, maxlen=4)
-        while(not done):
-            if(render):
-                env.render()
-            if(len(curr_state.shape) == 1):
-                curr_state = np.expand_dims(curr_state, 0)
-            if(len(curr_state.shape) == 3):
-                curr_state = atari_transform(curr_state)
-                # curr_state = np.transpose(curr_state, (0, 3, 1, 2))
-            # ## CAN THIS BE ADDDED HERE
-            frames_4.appendleft(curr_state)
-            prob = policy(torch.from_numpy(np.asarray(frames_4)).float().unsqueeze(0).to(device))
-            action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
-            new_state, reward, done, info = env.step(action.item())
-            states.append(frames_4)
-            actions.append(action)
-            rewards.append(reward)
-            log_probs.append(log_prob)
-            curr_state = new_state
-            count += 1
+    curr_state = env.reset()
+    # curr_state = transform_state(curr_state, env.observation_space.shape[0])
+    done = False
+    #For our case the len(states) = len(actions)= len(rewards) //VERIFY
+    count = 0
+    frames_4 = collections.deque([np.zeros(shape=(80, 80))]*3, maxlen=4)
+    while(not done):
+        if(render):
+            env.render()
+        if(len(curr_state.shape) == 1):
+            curr_state = np.expand_dims(curr_state, 0)
+        if(len(curr_state.shape) == 3):
+            curr_state = atari_transform(curr_state)
+        frames_4.appendleft(curr_state)
+        prob = policy(torch.from_numpy(np.asarray(frames_4)).float().unsqueeze(0).to(device))
+        action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
+        new_state, reward, done, info = env.step(action.item())
+        states.append(frames_4)
+        actions.append(action)
+        rewards.append(reward)
+        log_probs.append(log_prob)
+        curr_state = new_state
+        count += 1
     states = torch.from_numpy(np.array(states))
     return states, actions, rewards, log_probs, count
 
@@ -156,7 +153,7 @@ def test_agent(env, policy, num_test_episodes):
 
 
 def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N, gamma):
-    states, actions, rewards, log_probs, count = generate_episode(env, policy, num_ep=1)
+    states, actions, rewards, log_probs, count = generate_episode(env, policy)
     # import pdb; pdb.set_trace()
     V_all = value_policy(torch.from_numpy(np.array(states.squeeze(dim=2))).float().to(device)).squeeze()
     V_end = V_all[N:]
