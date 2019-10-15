@@ -1,5 +1,8 @@
+import collections
 import sys
 import argparse
+
+import cv2
 import numpy as np
 import gym
 
@@ -16,39 +19,173 @@ from torch.distributions import Categorical
 from tensorboardX import SummaryWriter
 import time
 
-from reinforce import Agent, generate_episode, test_agent
 
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if use_cuda else 'cpu')
 
-def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N, gamma):
-    states, actions, rewards, log_probs = generate_episode(env, policy, num_ep=1)
 
-    V_all = value_policy(torch.from_numpy(np.array(states)).float().to(device)).squeeze()
+class Agent_A3C(torch.nn.Module):
+    def __init__(self, env, hidden_units, output=None):
+        super(Agent_A3C, self).__init__()
+        self.num_states = env.observation_space.shape[0]
+        self.num_actions = env.action_space.n if output==None else output
+
+        self.conv1 = torch.nn.Conv2d(4, 32, kernel_size=8, stride=4, padding=0)
+        self.conv2 = torch.nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0)
+        self.conv3 = torch.nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0)
+
+        self.fc = torch.nn.Linear(64 * 8 * 8, 256)
+        self.fc_out = nn.Linear(256, self.num_actions)
+
+    def forward(self, x):
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = x.view(-1, 64 * 8 * 8)
+        x = F.relu(self.fc(x))
+        x = F.softmax(self.fc_out(x), dim=1)
+        return x
+
+    def init_weights(self, m):
+        if type(m) == nn.Linear or type(m) == nn.Conv2d:
+            m.weight.data.fill_(0)
+            m.bias.data.fill_(0)
+
+
+class CriticAgent_A3C(torch.nn.Module):
+    def __init__(self, env, hidden_units, output=None):
+        super(CriticAgent_A3C, self).__init__()
+
+        self.num_states = env.observation_space.shape[0]
+        self.num_actions = env.action_space.n if output==None else output
+
+        self.conv1 = torch.nn.Conv2d(4, 32, kernel_size=8, stride=4, padding=0)
+        self.conv2 = torch.nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=0)
+        self.conv3 = torch.nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=0)
+
+        self.fc = torch.nn.Linear(64 * 8 * 8, 256)
+        self.fc_out = nn.Linear(256, self.num_actions)
+
+    def forward(self, x):
+        # print(x)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = x.view(-1, 64 * 8 * 8)
+        x = F.relu(self.fc(x))
+        x = self.fc_out(x)
+        return x
+
+    def init_weights(self, m):
+        if type(m) == nn.Linear or type(m) == nn.Conv2d:
+            m.weight.data.fill_(0)
+            m.bias.data.fill_(0)
+
+
+
+def atari_transform(curr_state):
+    curr_state = cv2.cvtColor(curr_state, cv2.COLOR_BGR2GRAY)
+    curr_state = curr_state[34:34+160, :]
+    curr_state = cv2.resize(curr_state, (int(curr_state.shape[1]*0.5), int(curr_state.shape[0]*0.5)))
+    curr_state = curr_state/ 255.0
+    # cv2.imshow('y', curr_state)
+    # cv2.waitKey(0)
+    return curr_state
+
+
+def select_action(env, probs, type="prob_sample"):
+    if(type=="prob_sample"):
+        m = Categorical(probs)
+        action = m.sample()
+        return action, m.log_prob(action)
+    elif(type=="best"):
+        return torch.argmax(probs,axis=1)
+    elif(type=="random"):
+        return env.action_space.sample()
+
+def generate_episode(env, policy, render=False, num_ep=1):
+    # Generates an episode by executing the current policy in the given env.
+    # Returns:
+    # - a list of states, indexed by time step
+    # - a list of actions, indexed by time step
+    # - a list of rewards, indexed by time step
+    # TODO: Implement this method.
+    states = []
+    actions = []
+    rewards = []
+    log_probs = []
+
+    for _ in range(num_ep):
+        curr_state = env.reset()
+        # curr_state = transform_state(curr_state, env.observation_space.shape[0])
+        done = False
+        #For our case the len(states) = len(actions)= len(rewards) //VERIFY
+        count = 0
+        frames_4 = collections.deque([np.zeros(shape=(80, 80))]*3, maxlen=4)
+        while(not done):
+            if(render):
+                env.render()
+            if(len(curr_state.shape) == 1):
+                curr_state = np.expand_dims(curr_state, 0)
+            if(len(curr_state.shape) == 3):
+                curr_state = atari_transform(curr_state)
+                # curr_state = np.transpose(curr_state, (0, 3, 1, 2))
+            # ## CAN THIS BE ADDDED HERE
+            frames_4.appendleft(curr_state)
+            prob = policy(torch.from_numpy(np.asarray(frames_4)).float().unsqueeze(0).to(device))
+            action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
+            new_state, reward, done, info = env.step(action.item())
+            states.append(frames_4)
+            actions.append(action)
+            rewards.append(reward)
+            log_probs.append(log_prob)
+            curr_state = new_state
+            count += 1
+    states = torch.from_numpy(np.array(states))
+    return states, actions, rewards, log_probs, count
+
+
+def test_agent(env, policy, num_test_episodes):
+    rewards=[]
+    policy.eval()
+    for e in range(num_test_episodes):
+        _, _, episode_rewards, _, count = generate_episode(env, policy)
+        rewards.append(sum(episode_rewards))
+    rewards = np.array(rewards)
+    policy.train()
+    print("Testing - %d episodes mean %f & std deviation %f" %(num_test_episodes, rewards.mean(), rewards.std()))
+    return rewards.mean(), rewards.std()
+
+
+def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N, gamma):
+    states, actions, rewards, log_probs, count = generate_episode(env, policy, num_ep=1)
+    # import pdb; pdb.set_trace()
+    V_all = value_policy(torch.from_numpy(np.array(states.squeeze(dim=2))).float().to(device)).squeeze()
     V_end = V_all[N:]
     V_end = torch.cat((V_end, torch.zeros(N).float().to(device))) * torch.tensor(pow(gamma, N)).float().to(device)
 
-    rewards_tensor = torch.cat((torch.from_numpy(np.array(rewards)).float().to(device), torch.zeros(N-1).float().to(device)))
+    rewards_tensor = torch.cat((torch.from_numpy(np.array(rewards)/10).float().to(device), torch.zeros(N-1).float().to(device)))
     gamma_multiplier = torch.tensor(np.geomspace(1, pow(gamma, N-1), num=N)).float().to(device)
-    
+
     R_t = []
     for i in range(len(states)):
-        R_t.append(V_end[i].detach() + (gamma_multiplier * rewards_tensor[i:i+N]).sum())
-    R_t = torch.stack(R_t).float().to(device)/torch.tensor(100).float().to(device)
+        R_t.append(V_end[i] + (gamma_multiplier * rewards_tensor[i:i+N]).sum())
+    R_t = torch.stack(R_t).float().to(device)
 
     difference = R_t - V_all
-    L_policy = (difference.detach() * -torch.stack(log_probs).squeeze()).mean()
+    detached_difference = difference.detach()
+
+    L_policy = (detached_difference * -torch.stack(log_probs).squeeze()).sum()
     L_value_policy = torch.pow(difference, 2).mean()
 
+    policy_optimizer.zero_grad()
     value_policy_optimizer.zero_grad()
+
+    L_policy.backward()
     L_value_policy.backward()
+
+    policy_optimizer.step()
     value_policy_optimizer.step()
 
-    policy_optimizer.zero_grad()
-    L_policy.backward()
-    policy_optimizer.step()
-
-    return L_policy.item(), L_value_policy.item()
+    return L_policy.item(), L_value_policy.item(), count
     # for i in range(len(rewards)-1):
 
 
@@ -57,16 +194,17 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
     episodes = []
     stds = []
     for e in range(args.num_episodes):
-        loss_policy, loss_value = train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, args.n, args.gamma)
+        loss_policy, loss_value, count = train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, args.n, args.gamma)
         writer.add_scalar("train/Policy Loss", loss_policy, e)
         writer.add_scalar("train/Value Policy Loss", loss_value, e)
-        print("Completed episode %d, with Policy loss: %f and Value Policy Loss: %f"%(e, loss_policy, loss_value))
+        # print("Completed episode %d of steps %d, with Policy loss: %f and Value Policy Loss: %f"%(e, count, loss_policy, loss_value))
         if(e % args.test_frequency==0):
             score, std = test_agent(env, policy, args.num_test_epsiodes)
             writer.add_scalar('test/Reward', score , e)
             scores.append(score)
             episodes.append(e)
             stds.append(std)
+            np.savez(save_path+'reward_data', episodes, scores, stds)
         if(e % args.save_model_frequency == 0):
             torch.save({
                 'epoch': e,
@@ -91,7 +229,7 @@ def parse_arguments():
     parser.add_argument('--gamma', dest='gamma', type=float,
                         default=0.99, help="Gamma value.")
     parser.add_argument('--n', dest='n', type=int,
-                        default=20, help="The value of N in N-step A3C.")
+                        default=20, help="The value of N in N-step A2C.")
     parser.add_argument('--test_frequency', dest='test_frequency', type=int, default=200, help="After how many policies do I test the model")
     parser.add_argument('--num_test_epsiodes', dest='num_test_epsiodes', type=int, default=100, help="For how many policies do I test the model")
     parser.add_argument('--hidden_units', dest='hidden_units', type=int, default=16, help="Number of Hidden units in the linear layer")
@@ -123,26 +261,25 @@ def main(args):
     num_test_epsiodes = args.num_test_epsiodes
 
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    save_path = "runs/a3c_"+timestr+'/'
+    save_path = "runs/"+"a3c_"+str(args.n)+'_'+str(args.lr)+'_'+str(args.critic_lr)+'_'+timestr+'/'
 
     # Create the environment.
-    env = gym.make('LunarLander-v2')
+    env = gym.make('Breakout-v0')
 
     # TODO: Create the model.
-    policy = Agent(env, args.hidden_units)
+    policy = Agent_A3C(env, args.hidden_units)
     policy.to(device)
     policy_optimizer = optim.Adam(policy.parameters(), lr=lr)
 
-    value_policy = Agent(env, args.hidden_units, 1)
+    value_policy = CriticAgent_A3C(env, args.hidden_units, 1)
     value_policy.to(device)
     value_policy_optimizer = optim.Adam(value_policy.parameters(), lr=critic_lr)
 
     if(args.load_model == ""):
         writer = SummaryWriter(save_path)
         policy.apply(policy.init_weights)
-        value_policy.apply(value_policy.init_weights)
+        # value_policy.apply(value_policy.init_weights)
         episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args, save_path=save_path)
-        np.savez('runs/'+str(args.n)+'_a2c_reward_data_'+timestr, episodes, scores, stds)
     else:
         checkpoint = torch.load(args.load_model+'.pth')
         policy.load_state_dict(checkpoint['model_state_dict'])
@@ -153,7 +290,7 @@ def main(args):
         loss = checkpoint['loss']
         env = gym.wrappers.Monitor(env, "video.mp4", force=True)
         generate_episode(env, policy, True)
-    # TODO: Train the model using A3C and plot the learning curves.
+    # TODO: Train the model using A2C and plot the learning curves.
 
 
 if __name__ == '__main__':
