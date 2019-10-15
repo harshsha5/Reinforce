@@ -21,9 +21,32 @@ from reinforce import Agent, generate_episode, test_agent
 use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0' if use_cuda else 'cpu')
 
+class CriticAgent(torch.nn.Module):
+    def __init__(self, env, hidden_units, output=None):
+        super(CriticAgent, self).__init__()
+        self.num_states = env.observation_space.shape[0]
+        self.num_actions = env.action_space.n if output==None else output
+        self.linear1 = nn.Linear(self.num_states, hidden_units)
+        self.linear2 = nn.Linear(hidden_units, hidden_units)
+        self.linear3 = nn.Linear(hidden_units, hidden_units)
+        self.linear4 = nn.Linear(hidden_units, self.num_actions)
+
+    def forward(self, x):
+        x = F.relu(self.linear1(x))
+        x = F.relu(self.linear2(x))
+        x = F.relu(self.linear3(x))
+        x = self.linear4(x)
+        return x
+    
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            alpha = np.sqrt(3/((self.num_states+self.num_actions)/2))
+            m.bias.data.fill_(0)
+            m.weight.data.uniform_(-alpha,alpha)
+
 def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N, gamma):
     states, actions, rewards, log_probs = generate_episode(env, policy, num_ep=1)
-    
+    import pdb; pdb.set_trace()
     V_all = value_policy(torch.from_numpy(np.array(states.squeeze())).float().to(device)).squeeze()
     V_end = V_all[N:]
     V_end = torch.cat((V_end, torch.zeros(N).float().to(device))) * torch.tensor(pow(gamma, N)).float().to(device)
@@ -137,14 +160,14 @@ def main(args):
     policy.to(device)
     policy_optimizer = optim.Adam(policy.parameters(), lr=lr)
 
-    value_policy = Agent(env, args.hidden_units, 1)
+    value_policy = CriticAgent(env, args.hidden_units, 1)
     value_policy.to(device)
     value_policy_optimizer = optim.Adam(value_policy.parameters(), lr=critic_lr)
 
     if(args.load_model == ""):
         writer = SummaryWriter(save_path)
         policy.apply(policy.init_weights)
-        value_policy.apply(value_policy.init_weights)
+        # value_policy.apply(value_policy.init_weights)
         episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args, save_path=save_path)
     else:
         checkpoint = torch.load(args.load_model+'.pth')
