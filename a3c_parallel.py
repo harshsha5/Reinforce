@@ -274,7 +274,7 @@ def train( shared_policy, shared_value_policy, policy_optimizer, value_policy_op
         R_t.append(V_end[i] + (gamma_multiplier * rewards_tensor[i:i+N]).sum())
     R_t = torch.stack(R_t).float().to(device)
 
-    difference = R_t - V_all
+    difference = R_t.detach() - V_all
     detached_difference = difference.detach()
 
     L_policy = (detached_difference * -torch.stack(log_probs).squeeze()).sum()
