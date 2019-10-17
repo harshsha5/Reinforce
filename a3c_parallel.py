@@ -1,4 +1,6 @@
 import collections
+import math
+import os
 import sys
 import argparse
 
@@ -11,22 +13,101 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 import torch
+# torch.multiprocessing.set_start_method('spawn', force=True)
+
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+import torch.multiprocessing as mp
 from torch.distributions import Categorical
 
 from tensorboardX import SummaryWriter
 import time
 
 
-use_cuda = torch.cuda.is_available()
-device = torch.device('cuda:0' if use_cuda else 'cpu')
+# use_cuda = torch.cuda.is_available()
+device = torch.device('cuda:0')
 
 
-class Agent_A3C(torch.nn.Module):
+class SharedAdamW(optim.AdamW):
+    """Implements Adam algorithm with shared states.
+    """
+
+    def __init__(self,
+                 params,
+                 lr=1e-3,
+                 betas=(0.9, 0.999),
+                 eps=1e-8,
+                 weight_decay=0):
+        super(SharedAdamW, self).__init__(params, lr, betas, eps, weight_decay)
+
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state[p]
+                state['step'] = torch.zeros(1)
+                state['exp_avg'] = p.data.new().resize_as_(p.data).zero_()
+                state['exp_avg_sq'] = p.data.new().resize_as_(p.data).zero_()
+
+    def share_memory(self):
+        for group in self.param_groups:
+            for p in group['params']:
+                state = self.state[p]
+                state['step'].share_memory_()
+                state['exp_avg'].share_memory_()
+                state['exp_avg_sq'].share_memory_()
+
+    def step(self, closure=None):
+        """Performs a single optimization step.
+        Arguments:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss.
+        """
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                grad = p.grad.data
+                state = self.state[p]
+
+                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
+                beta1, beta2 = group['betas']
+
+                state['step'] += 1
+
+                if group['weight_decay'] != 0:
+                    grad = grad.add(group['weight_decay'], p.data)
+
+                # Decay the first and second moment running average coefficient
+                exp_avg.mul_(beta1).add_(1 - beta1, grad)
+                exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
+
+                denom = exp_avg_sq.sqrt().add_(group['eps'])
+
+                bias_correction1 = 1 - beta1 ** state['step'].item()
+                bias_correction2 = 1 - beta2 ** state['step'].item()
+                step_size = group['lr'] * math.sqrt(
+                    bias_correction2) / bias_correction1
+
+                p.data.addcdiv_(-step_size, exp_avg, denom)
+
+        return loss
+
+
+def ensure_shared_grads(model, shared_model):
+    for param, shared_param in zip(model.parameters(),
+                                   shared_model.parameters()):
+        if shared_param.grad is not None:
+            return
+        shared_param._grad = param.grad
+
+
+class Agent_Breakout(torch.nn.Module):
     def __init__(self, env):
-        super(Agent_A3C, self).__init__()
+        super(Agent_Breakout, self).__init__()
         self.num_states = env.observation_space.shape[0]
         self.num_actions = env.action_space.n
 
@@ -51,9 +132,9 @@ class Agent_A3C(torch.nn.Module):
             m.bias.data.fill_(0)
 
 
-class CriticAgent_A3C(torch.nn.Module):
-    def __init__(self, env, hidden_units, output=0):
-        super(CriticAgent_A3C, self).__init__()
+class CriticAgent_Breakout(torch.nn.Module):
+    def __init__(self, env, output=0):
+        super(CriticAgent_Breakout, self).__init__()
 
         self.num_states = env.observation_space.shape[0]
         self.num_actions = env.action_space.n if output==0 else output
@@ -80,7 +161,6 @@ class CriticAgent_A3C(torch.nn.Module):
             m.bias.data.fill_(0)
 
 
-
 def atari_transform(curr_state):
     curr_state = cv2.cvtColor(curr_state, cv2.COLOR_BGR2GRAY)
     curr_state = curr_state[34:34+160, :]
@@ -101,7 +181,7 @@ def select_action(env, probs, type="prob_sample"):
     elif(type=="random"):
         return env.action_space.sample()
 
-def generate_episode(env, policy, render=False):
+def generate_episode(env, policy, counter, lock, render=False):
     # Generates an episode by executing the current policy in the given env.
     # Returns:
     # - a list of states, indexed by time step
@@ -130,6 +210,11 @@ def generate_episode(env, policy, render=False):
         prob = policy(torch.from_numpy(np.asarray(frames_4)).float().unsqueeze(0).to(device))
         action, log_prob = select_action(env, prob)         #VERIFY IF BEST ACTION NEEDS TO BE TAKEN OR RANDOM
         new_state, reward, done, info = env.step(action.item())
+
+
+        # with lock:
+        #     counter.value += 1
+
         states.append(frames_4)
         actions.append(action)
         rewards.append(reward)
@@ -140,11 +225,11 @@ def generate_episode(env, policy, render=False):
     return states, actions, rewards, log_probs, count
 
 
-def test_agent(env, policy, num_test_episodes):
+def test_agent(env, policy, num_test_episodes, counter, lock):
     rewards=[]
     policy.eval()
     for e in range(num_test_episodes):
-        _, _, episode_rewards, _, count = generate_episode(env, policy)
+        _, _, episode_rewards, _, count = generate_episode(env, policy, counter, lock)
         rewards.append(sum(episode_rewards))
     rewards = np.array(rewards)
     policy.train()
@@ -152,8 +237,30 @@ def test_agent(env, policy, num_test_episodes):
     return rewards.mean(), rewards.std()
 
 
-def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N, gamma):
-    states, actions, rewards, log_probs, count = generate_episode(env, policy)
+def train( shared_policy, shared_value_policy, policy_optimizer, value_policy_optimizer, N, gamma, args, e, q, counter, lock):
+
+    torch.manual_seed(args.seed + e)
+
+    # Create the environment.
+    env = gym.make('Breakout-v0')
+    env.seed(args.seed + e)
+
+    policy = Agent_Breakout(env)
+    policy.to(device)
+
+    value_policy = CriticAgent_Breakout(env, 1)
+    value_policy.to(device)
+
+    if policy_optimizer is None:
+        policy_optimizer = optim.AdamW(policy.parameters(), lr=args.lr)
+    if value_policy_optimizer is None:
+        value_policy_optimizer = optim.AdamW(value_policy.parameters(), lr=args.critic_lr)
+
+    policy.load_state_dict(shared_policy.state_dict())
+    value_policy.load_state_dict(shared_value_policy.state_dict())
+
+    states, actions, rewards, log_probs, count = generate_episode(env, policy, counter, lock)
+
     # import pdb; pdb.set_trace()
     V_all = value_policy(torch.from_numpy(np.array(states.squeeze(dim=2))).float().to(device)).squeeze()
     V_end = V_all[N:]
@@ -179,29 +286,62 @@ def train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, N
     L_policy.backward()
     L_value_policy.backward()
 
+    ensure_shared_grads(policy, shared_policy)
+    ensure_shared_grads(value_policy, shared_value_policy)
+
     policy_optimizer.step()
     value_policy_optimizer.step()
+
+    q.put( (L_policy.item(), L_value_policy.item(), e, count) )
 
     return L_policy.item(), L_value_policy.item(), count
     # for i in range(len(rewards)-1):
 
+def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimizer, scheduler_policy, scheduler_value_policy, writer, args, save_path, ctx):
 
-def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimizer, writer, args, save_path):
+    q = ctx.Queue()
+    e = ctx.Event()
+
     scores = []
     episodes = []
     stds = []
-    for e in range(args.num_episodes):
-        loss_policy, loss_value, count = train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, args.n, args.gamma)
-        writer.add_scalar("train/Policy Loss", loss_policy, e)
-        writer.add_scalar("train/Value Policy Loss", loss_value, e)
-        # print("Completed episode %d of steps %d, with Policy loss: %f and Value Policy Loss: %f"%(e, count, loss_policy, loss_value))
-        if(e % args.test_frequency==0):
-            score, std = test_agent(env, policy, args.num_test_epsiodes)
-            writer.add_scalar('test/Reward', score , e)
+
+    # A3C multi processing
+    counter = mp.Value('i', 0)
+    lock = mp.Lock()
+    processes = []
+
+    e = 0
+    # for e in range(args.num_episodes):
+    while e < args.num_episodes:
+
+        for i in range(args.num_processes):
+            p = ctx.Process(target=train, args=(policy, value_policy, policy_optimizer, value_policy_optimizer, args.n, args.gamma, args, e, q, counter, lock))
+            p.start()
+            processes.append(p)
+            e += 1
+        for p in processes:
+            p.join()
+
+        for i in range(args.num_processes):
+            loss_policy, loss_value, e_, count = q.get()
+        writer.add_scalar("train/Policy Loss", loss_policy, e_)
+        writer.add_scalar("train/Value Policy Loss", loss_value, e_)
+        # print("Completed episode %d of steps %d, with Policy loss: %f and Value Policy Loss: %f"%(e_, count, loss_policy, loss_value))
+
+        # loss_policy, loss_value, count = train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, args.n, args.gamma, e, args, counter, lock)
+        # writer.add_scalar("train/Policy Loss", loss_policy, e)
+        # writer.add_scalar("train/Value Policy Loss", loss_value, e)
+        # # print("Completed episode %d of steps %d, with Policy loss: %f and Value Policy Loss: %f"%(e, count, loss_policy, loss_value))
+
+        if(e % args.test_frequency-args.num_processes==0):
+            score, std = test_agent(env, policy, args.num_test_epsiodes, counter, lock)
+            writer.add_scalar('test/Reward', score, e)
             scores.append(score)
             episodes.append(e)
             stds.append(std)
             np.savez(save_path+'reward_data', episodes, scores, stds)
+
         if(e % args.save_model_frequency == 0):
             torch.save({
                 'epoch': e,
@@ -212,26 +352,32 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
                 'loss_policy': loss_policy,
                 'loss_value': loss_value
                 }, save_path+'checkpoint'+str(e)+'.pth')
+
+
+        scheduler_policy.step(loss_policy)
+        scheduler_value_policy.step(loss_value)
+
     return episodes, scores, stds
 
 def parse_arguments():
     # Command-line flags are defined here.
     parser = argparse.ArgumentParser()
-    parser.add_argument('--num-episodes', dest='num_episodes', type=int,
-                        default=50000, help="Number of episodes to train on.")
-    parser.add_argument('--lr', dest='lr', type=float,
-                        default=5e-4, help="The actor's learning rate.")
-    parser.add_argument('--critic-lr', dest='critic_lr', type=float,
-                        default=1e-4, help="The critic's learning rate.")
-    parser.add_argument('--gamma', dest='gamma', type=float,
-                        default=0.99, help="Gamma value.")
-    parser.add_argument('--n', dest='n', type=int,
-                        default=20, help="The value of N in N-step A2C.")
+    parser.add_argument('--num-episodes', dest='num_episodes', type=int, default=50000, help="Number of episodes to train on.")
+    parser.add_argument('--lr', dest='lr', type=float, default=5e-4, help="The actor's learning rate.")
+    parser.add_argument('--critic-lr', dest='critic_lr', type=float, default=1e-4, help="The critic's learning rate.")
+    parser.add_argument('--gamma', dest='gamma', type=float, default=0.99, help="Gamma value.")
+    parser.add_argument('--n', dest='n', type=int, default=20, help="The value of N in N-step A2C.")
     parser.add_argument('--test_frequency', dest='test_frequency', type=int, default=200, help="After how many policies do I test the model")
     parser.add_argument('--num_test_epsiodes', dest='num_test_epsiodes', type=int, default=100, help="For how many policies do I test the model")
     parser.add_argument('--hidden_units', dest='hidden_units', type=int, default=16, help="Number of Hidden units in the linear layer")
     parser.add_argument('--save_model_frequency', dest='save_model_frequency', type=int, default=1000, help="Frequency of saving the model")
     parser.add_argument('--load_model', dest='load_model', type=str, default="", help="load path of the model")
+
+    # A3C Args
+    parser.add_argument('--seed', type=int, default=1, help='random seed (default: 1)')
+    parser.add_argument('--num-processes', type=int, default=5, help='how many training processes to use (default: 5)')
+    parser.add_argument('--no-shared', default=False, help='use an optimizer without shared momentum.')
+
 
     # https://stackoverflow.com/questions/15008758/parsing-boolean-values-with-argparse
     parser_group = parser.add_mutually_exclusive_group(required=False)
@@ -258,25 +404,50 @@ def main(args):
     num_test_epsiodes = args.num_test_epsiodes
 
     timestr = time.strftime("%Y%m%d-%H%M%S")
-    save_path = "runs/"+"a3c_"+str(args.n)+'_'+str(args.lr)+'_'+str(args.critic_lr)+'_'+timestr+'/'
+    save_path = "runs/"+"a3c_parallel_"+str(args.num_processes)+'_'+str(args.n)+'_'+str(args.lr)+'_'+str(args.critic_lr)+'_'+timestr+'/'
+
+     # A3C
 
     # Create the environment.
     env = gym.make('Breakout-v0')
 
-    # TODO: Create the model.
-    policy = Agent_A3C(env, args.hidden_units)
-    policy.to(device)
-    policy_optimizer = optim.Adam(policy.parameters(), lr=lr)
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
-    value_policy = CriticAgent_A3C(env, args.hidden_units, 1)
+    ctx = mp.get_context("spawn")
+
+    torch.manual_seed(args.seed)
+
+    policy = Agent_Breakout(env)
+    policy.to(device)
+
+    value_policy = CriticAgent_Breakout(env, 1)
     value_policy.to(device)
-    value_policy_optimizer = optim.Adam(value_policy.parameters(), lr=critic_lr)
+
+    # A3C
+    policy.share_memory()
+    value_policy.share_memory()
+
+    if args.no_shared:
+        policy_optimizer = optim.AdamW(policy.parameters(), lr=lr)
+        value_policy_optimizer = optim.AdamW(value_policy.parameters(), lr=critic_lr)
+    else:
+        policy_optimizer = SharedAdamW(policy.parameters(), lr=lr)
+        value_policy_optimizer = SharedAdamW(value_policy.parameters(), lr=lr)
+
+        policy_optimizer.share_memory()
+        value_policy_optimizer.share_memory()
+
+    scheduler_policy = optim.lr_scheduler.ReduceLROnPlateau(policy_optimizer, 'min')
+    scheduler_value_policy = optim.lr_scheduler.ReduceLROnPlateau(value_policy_optimizer, 'min')
 
     if(args.load_model == ""):
         writer = SummaryWriter(save_path)
         policy.apply(policy.init_weights)
-        # value_policy.apply(value_policy.init_weights)
-        episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, value_policy_optimizer=value_policy_optimizer, writer=writer, args=args, save_path=save_path)
+        value_policy.apply(value_policy.init_weights)
+        episodes, scores, stds = train_agent(policy=policy, value_policy=value_policy, env=env, policy_optimizer=policy_optimizer, 
+                                             value_policy_optimizer=value_policy_optimizer, scheduler_policy=scheduler_policy, 
+                                             scheduler_value_policy=scheduler_value_policy, writer=writer, args=args, save_path=save_path, ctx=ctx)
     else:
         checkpoint = torch.load(args.load_model+'.pth')
         policy.load_state_dict(checkpoint['model_state_dict'])
