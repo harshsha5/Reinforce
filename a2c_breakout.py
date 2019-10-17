@@ -201,10 +201,12 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
         loss_policy, loss_value, count = train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, args.n, args.gamma)
         writer.add_scalar("train/Policy Loss", loss_policy, e)
         writer.add_scalar("train/Value Policy Loss", loss_value, e)
+        writer.add_scalar("train/abs_Policy Loss", abs(loss_policy), e)
+        writer.add_scalar("train/abs_Value Policy Loss", abs(loss_value), e)
         # print("Completed episode %d of steps %d, with Policy loss: %f and Value Policy Loss: %f"%(e, count, loss_policy, loss_value))
 
-        running_loss_policy += loss_policy
-        running_loss_value_policy += loss_value
+        running_loss_policy += abs(loss_policy)
+        running_loss_value_policy += abs(loss_value)
 
         if(e % args.test_frequency==0):
 
