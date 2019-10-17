@@ -27,7 +27,7 @@ import time
 
 # use_cuda = torch.cuda.is_available()
 device = torch.device('cuda:0')
-
+torch.cuda.empty_cache()
 
 class SharedAdamW(optim.AdamW):
     """Implements Adam algorithm with shared states.
@@ -313,6 +313,12 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
 
     e = 0
     # for e in range(args.num_episodes):
+
+    running_loss_policy = 0
+    running_loss_value_policy = 0
+    avg_loss_policy = 0
+    avg_loss_value_policy = 0
+
     while e < args.num_episodes:
 
         for i in range(args.num_processes):
@@ -325,6 +331,9 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
 
         for i in range(args.num_processes):
             loss_policy, loss_value, e_, count = q.get()
+            running_loss_policy += loss_policy
+            running_loss_value_policy += loss_value
+
         writer.add_scalar("train/Policy Loss", loss_policy, e_)
         writer.add_scalar("train/Value Policy Loss", loss_value, e_)
         # print("Completed episode %d of steps %d, with Policy loss: %f and Value Policy Loss: %f"%(e_, count, loss_policy, loss_value))
@@ -337,10 +346,18 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
         if(e % args.test_frequency-args.num_processes==0):
             score, std = test_agent(env, policy, args.num_test_epsiodes, counter, lock)
             writer.add_scalar('test/Reward', score, e)
+            writer.add_scalar("train/LR_policy", policy_optimizer.param_groups[-1]['lr'], e)
+            writer.add_scalar("train/LR_value_policy", value_policy_optimizer.param_groups[-1]['lr'], e)
             scores.append(score)
             episodes.append(e)
             stds.append(std)
             np.savez(save_path+'reward_data', episodes, scores, stds)
+
+            avg_loss_policy = running_loss_policy/args.test_frequency
+            avg_loss_value_policy = running_loss_value_policy/args.test_frequency
+
+            running_loss_policy = 0
+            running_loss_value_policy = 0
 
         if(e % args.save_model_frequency == 0):
             torch.save({
@@ -354,8 +371,8 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
                 }, save_path+'checkpoint'+str(e)+'.pth')
 
 
-        scheduler_policy.step(loss_policy)
-        scheduler_value_policy.step(loss_value)
+        scheduler_policy.step(avg_loss_policy)
+        scheduler_value_policy.step(avg_loss_value_policy)
 
     return episodes, scores, stds
 
@@ -438,8 +455,8 @@ def main(args):
         policy_optimizer.share_memory()
         value_policy_optimizer.share_memory()
 
-    scheduler_policy = optim.lr_scheduler.ReduceLROnPlateau(policy_optimizer, 'min')
-    scheduler_value_policy = optim.lr_scheduler.ReduceLROnPlateau(value_policy_optimizer, 'min')
+    scheduler_policy = optim.lr_scheduler.ReduceLROnPlateau(policy_optimizer, 'min', factor=0.5)
+    scheduler_value_policy = optim.lr_scheduler.ReduceLROnPlateau(value_policy_optimizer, 'min', factor=0.5)
 
     if(args.load_model == ""):
         writer = SummaryWriter(save_path)

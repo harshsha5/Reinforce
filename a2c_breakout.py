@@ -192,19 +192,36 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
     episodes = []
     stds = []
 
+    running_loss_policy = 0
+    running_loss_value_policy = 0
+    avg_loss_policy = 0
+    avg_loss_value_policy = 0
+
     for e in range(args.num_episodes):
         loss_policy, loss_value, count = train(env, policy, value_policy, policy_optimizer, value_policy_optimizer, args.n, args.gamma)
         writer.add_scalar("train/Policy Loss", loss_policy, e)
         writer.add_scalar("train/Value Policy Loss", loss_value, e)
         # print("Completed episode %d of steps %d, with Policy loss: %f and Value Policy Loss: %f"%(e, count, loss_policy, loss_value))
+
+        running_loss_policy += loss_policy
+        running_loss_value_policy += loss_value
+
         if(e % args.test_frequency==0):
 
             score, std = test_agent(env, policy, args.num_test_epsiodes)
             writer.add_scalar('test/Reward', score , e)
+            writer.add_scalar("train/LR_policy", policy_optimizer.param_groups[-1]['lr'], e)
+            writer.add_scalar("train/LR_value_policy", value_policy_optimizer.param_groups[-1]['lr'], e)
             scores.append(score)
             episodes.append(e)
             stds.append(std)
             np.savez(save_path+'reward_data', episodes, scores, stds)
+
+            avg_loss_policy = running_loss_policy/args.test_frequency
+            avg_loss_value_policy = running_loss_value_policy/args.test_frequency
+
+            running_loss_policy = 0
+            running_loss_value_policy = 0
 
         if(e % args.save_model_frequency == 0):
             torch.save({
@@ -216,6 +233,10 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
                 'loss_policy': loss_policy,
                 'loss_value': loss_value
                 }, save_path+'checkpoint'+str(e)+'.pth')
+
+        scheduler_policy.step(avg_loss_policy)
+        scheduler_value_policy.step(avg_loss_value_policy)
+
 
     return episodes, scores, stds
 
@@ -276,8 +297,8 @@ def main(args):
     policy_optimizer = optim.AdamW(policy.parameters(), lr=lr)
     value_policy_optimizer = optim.AdamW(value_policy.parameters(), lr=critic_lr)
 
-    scheduler_policy = optim.lr_scheduler.ReduceLROnPlateau(policy_optimizer, 'min')
-    scheduler_value_policy = optim.lr_scheduler.ReduceLROnPlateau(value_policy_optimizer, 'min')
+    scheduler_policy = optim.lr_scheduler.ReduceLROnPlateau(policy_optimizer, 'min', factor=0.5)
+    scheduler_value_policy = optim.lr_scheduler.ReduceLROnPlateau(value_policy_optimizer, 'min', factor=0.5)
 
     if(args.load_model == ""):
         writer = SummaryWriter(save_path)
