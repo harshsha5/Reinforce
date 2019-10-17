@@ -360,13 +360,15 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
 
 
             writer.add_scalar('test/Reward', score , e)
-            writer.add_scalar("train/Avg_Policy Loss", avg_loss_policy, e)
-            writer.add_scalar("train/Avg_Value Policy Loss", avg_loss_value_policy, e)
             writer.add_scalar("train/LR_policy", policy_optimizer.param_groups[-1]['lr'], e)
             writer.add_scalar("train/LR_value_policy", value_policy_optimizer.param_groups[-1]['lr'], e)
 
-            scheduler_policy.step(avg_loss_policy)
-            scheduler_value_policy.step(avg_loss_value_policy)
+            if e!=args.num_processes:
+                writer.add_scalar("train/Avg_Policy Loss", avg_loss_policy, e)
+                writer.add_scalar("train/Avg_Value Policy Loss", avg_loss_value_policy, e)
+
+                scheduler_policy.step(avg_loss_policy)
+                scheduler_value_policy.step(avg_loss_value_policy)
 
         if(e % args.save_model_frequency == 0):
             torch.save({
