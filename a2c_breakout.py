@@ -209,9 +209,6 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
         if(e % args.test_frequency==0):
 
             score, std = test_agent(env, policy, args.num_test_epsiodes)
-            writer.add_scalar('test/Reward', score , e)
-            writer.add_scalar("train/LR_policy", policy_optimizer.param_groups[-1]['lr'], e)
-            writer.add_scalar("train/LR_value_policy", value_policy_optimizer.param_groups[-1]['lr'], e)
             scores.append(score)
             episodes.append(e)
             stds.append(std)
@@ -223,6 +220,15 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
             running_loss_policy = 0
             running_loss_value_policy = 0
 
+            writer.add_scalar('test/Reward', score , e)
+            writer.add_scalar("train/Avg_Policy Loss", avg_loss_policy, e)
+            writer.add_scalar("train/Avg_Value Policy Loss", avg_loss_value_policy, e)
+            writer.add_scalar("train/LR_policy", policy_optimizer.param_groups[-1]['lr'], e)
+            writer.add_scalar("train/LR_value_policy", value_policy_optimizer.param_groups[-1]['lr'], e)
+
+            scheduler_policy.step(avg_loss_policy)
+            scheduler_value_policy.step(avg_loss_value_policy)
+
         if(e % args.save_model_frequency == 0):
             torch.save({
                 'epoch': e,
@@ -233,9 +239,6 @@ def train_agent(policy, value_policy, env, policy_optimizer, value_policy_optimi
                 'loss_policy': loss_policy,
                 'loss_value': loss_value
                 }, save_path+'checkpoint'+str(e)+'.pth')
-
-        scheduler_policy.step(avg_loss_policy)
-        scheduler_value_policy.step(avg_loss_value_policy)
 
 
     return episodes, scores, stds
@@ -297,8 +300,8 @@ def main(args):
     policy_optimizer = optim.AdamW(policy.parameters(), lr=lr)
     value_policy_optimizer = optim.AdamW(value_policy.parameters(), lr=critic_lr)
 
-    scheduler_policy = optim.lr_scheduler.ReduceLROnPlateau(policy_optimizer, 'min', factor=0.5)
-    scheduler_value_policy = optim.lr_scheduler.ReduceLROnPlateau(value_policy_optimizer, 'min', factor=0.5)
+    scheduler_policy = optim.lr_scheduler.ReduceLROnPlateau(policy_optimizer, 'min', factor=0.5, patience=3)
+    scheduler_value_policy = optim.lr_scheduler.ReduceLROnPlateau(value_policy_optimizer, 'min', factor=0.5, patience=3)
 
     if(args.load_model == ""):
         writer = SummaryWriter(save_path)
